@@ -1,0 +1,20 @@
+# 统一换行符为 LF（Windows 检出时也不再转 CRLF）
+* text=auto eol=lf
+
+# 文本文件（显式声明，覆盖上面的自动检测）
+*.conf text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+
+# 二进制文件（不做换行处理）
+*.srs binary
+*.exe binary
+*.png binary
+*.jpg binary
+*.ico binary

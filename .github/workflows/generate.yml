@@ -1,0 +1,53 @@
+name: Generate Rule Sets
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '6 6 * * 6'   # 每周六 06:06 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  copilot-requests: write
+
+env:
+  # 固定的 sing-box 版本（最新 beta；后续正式版发布后在此升级）。
+  # 依赖不自动更新，全部以 go get 拉取的 SB_VERSION 为准。
+  SB_VERSION: v1.14.0-beta.14
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Build
+        run: |
+          # go.mod/go.sum 不入库，构建时自动生成（仅固定 sing-box 版本，不自动更新依赖）
+          if [ ! -f go.mod ]; then
+            go mod init sing-box-rules
+          fi
+          go get github.com/sagernet/sing-box@${{ env.SB_VERSION }}
+          go mod tidy
+          go build -o sbrules ./cmd/sbrules
+
+      - name: Run generator
+        run: ./sbrules build --conf-dir . --out-dir out --strict
+
+      - name: Install Copilot CLI (for AI evaluation)
+        # 默认开启；仓库 Variables 设 ENABLE_AI=false 可关闭
+        if: vars.ENABLE_AI != 'false'
+        run: npm install -g @github/copilot
+
+      - name: Commit and push to rule-set
+        env:
+          ENABLE_AI: ${{ vars.ENABLE_AI }}
+        run: bash .github/scripts/release.sh
