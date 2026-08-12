@@ -24,6 +24,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # go.mod/go.sum 不入库，先预建最小 go.mod 让 setup-go 的模块缓存可命中
+      - name: Prepare go.mod for module cache
+        run: |
+          if [ ! -f go.mod ]; then
+            printf 'module sing-box-rules\n\ngo 1.24\n' > go.mod
+          fi
+
       - uses: actions/setup-go@v6
         with:
           go-version: 'stable'

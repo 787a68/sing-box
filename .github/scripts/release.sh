@@ -100,16 +100,26 @@ $DIFF_SECTION
 EOF
 )
     copilot_args=(--yolo --model "$AI_MODEL")
+    tmpout=$(mktemp)
+    tmperr=$(mktemp)
     if [ -n "$prompt" ]; then
-      resp=$(copilot "${copilot_args[@]}" -p "$prompt"$'\n\n'"$summary" 2>/dev/null | head -c "$AI_MAX_CHARS") || resp=""
+      timeout 300 copilot "${copilot_args[@]}" -p "$prompt"$'\n\n'"$summary" >"$tmpout" 2>"$tmperr" || true
     else
-      resp=$(copilot "${copilot_args[@]}" -p "$summary" 2>/dev/null | head -c "$AI_MAX_CHARS") || resp=""
+      timeout 300 copilot "${copilot_args[@]}" -p "$summary" >"$tmpout" 2>"$tmperr" || true
     fi
+    resp=$(head -c "$AI_MAX_CHARS" "$tmpout")
     if [ -n "$resp" ]; then
       AI_SECTION="$resp"
     else
-      AI_SECTION="(AI evaluation unavailable)"
+      # 失败原因透传首行，便于定位（认证 / 权限 / 订阅等）
+      err=$(head -1 "$tmperr" 2>/dev/null)
+      if [ -n "$err" ]; then
+        AI_SECTION="(AI evaluation unavailable: $err)"
+      else
+        AI_SECTION="(AI evaluation unavailable)"
+      fi
     fi
+    rm -f "$tmpout" "$tmperr"
   fi
 else
   AI_SECTION="(disabled by ENABLE_AI=false)"
