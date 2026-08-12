@@ -16,16 +16,16 @@
         "flyert.com",
         "gandi.net",
         "snapdrop.net",
+        "dl.delivery.mp.microsoft.com",
+        "update.microsoft.com",
         "windowsupdate.com",
+        "windowsupdate.microsoft.com",
         "paypal.com",
         "paypal.me",
         "paypal-mktg.com",
         "paypalobjects.com",
-        "steamserver.net",
-        "update.microsoft.com",
-        "windowsupdate.microsoft.com",
         "cm.steampowered.com",
-        "dl.delivery.mp.microsoft.com"
+        "steamserver.net"
       ],
       "ip_cidr": [
         "182.254.116.0/24",
