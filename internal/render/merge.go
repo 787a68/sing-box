@@ -2,13 +2,14 @@ package render
 
 import (
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common/json/badoption"
+
+	"sing-box-rules/internal/transform"
 )
 
 // Merge 将多条同类型默认规则归并为一条（同字段值追加），保持出现顺序。
 // logical 规则保留原样（由调用方置于独立位置）。
 func Merge(rules []option.HeadlessRule) option.HeadlessRule {
-	merged := transformDefaultRule()
+	merged := transform.DefaultRule()
 	for _, r := range rules {
 		if r.Type != "default" && r.Type != "" {
 			continue
@@ -31,27 +32,6 @@ func Merge(rules []option.HeadlessRule) option.HeadlessRule {
 	return merged
 }
 
-// MergePreserveLogical 归并时保留 logical 规则：返回 [合并后的默认规则 + 其余非默认规则]。
-// 若没有任何默认规则则仅返回非默认规则。
-func MergePreserveLogical(rules []option.HeadlessRule) []option.HeadlessRule {
-	var defaultRules, others []option.HeadlessRule
-	for _, r := range rules {
-		if r.Type == "default" || r.Type == "" {
-			defaultRules = append(defaultRules, r)
-		} else {
-			others = append(others, r)
-		}
-	}
-	if len(defaultRules) == 0 {
-		return others
-	}
-	return append([]option.HeadlessRule{Merge(defaultRules)}, others...)
-}
-
-func transformDefaultRule() option.HeadlessRule {
-	return option.HeadlessRule{Type: "default"}
-}
-
 // IsEmpty 判断归并后的规则是否没有任何匹配字段。
 func IsEmpty(r option.HeadlessRule) bool {
 	d := r.DefaultOptions
@@ -61,9 +41,4 @@ func IsEmpty(r option.HeadlessRule) bool {
 		len(d.Port) == 0 && len(d.SourcePort) == 0 &&
 		len(d.PortRange) == 0 && len(d.SourcePortRange) == 0 &&
 		len(d.Network) == 0 && len(d.QueryType) == 0
-}
-
-// AppendStr 辅助：追加字符串列表。
-func AppendStr(list *badoption.Listable[string], values ...string) {
-	*list = append(*list, values...)
 }

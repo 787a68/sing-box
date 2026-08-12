@@ -6,72 +6,83 @@ import (
 	"strings"
 )
 
-// DomainSuffix 语义去重：父域覆盖子域（保留更宽的）；被 keyword 覆盖的删除。
-// 保持相对顺序。
-func DomainSuffix(values []string) []string {
-	// 按"标签数从少到多"排序后保留最宽的，再还原原序
-	idx := sortedByWidth(values, suffixWidth)
-	var kept []int
+// 语义去重（与 quantumult-x 的 SemanticDedup 对齐）：
+// 先按 key 排序（祖先在前），再单遍扫描——每条只与"更靠前且已保留"的条目比对，
+// 被覆盖即删除（首条保留）。输出按原输入顺序还原。
+// 复杂度 O(n·标签数 + n·keyword数)，无 O(n²) 全量扫描。
+
+// DedupKeywords 语义去重：keyword 被更早(排序后靠前)的 keyword 子串覆盖则删除。
+// 空串 keyword 直接丢弃（否则会误伤所有条目）。
+func DedupKeywords(values []string) []string {
+	idx := sortedByKeys(keys(values, identityKey))
+	var kept []string
+	var keptIdx []int
 	for _, i := range idx {
+		v := values[i]
+		if v == "" {
+			continue
+		}
 		covered := false
-		for _, k := range kept {
-			if SuffixCovers(values[k], values[i]) {
+		for _, kw := range kept {
+			if len(kw) <= len(v) && strings.Contains(v, kw) {
 				covered = true
 				break
 			}
 		}
 		if !covered {
-			kept = append(kept, i)
+			kept = append(kept, v)
+			keptIdx = append(keptIdx, i)
 		}
 	}
-	return reorder(values, kept)
+	sort.Ints(keptIdx) // 按原始顺序输出
+	return reorder(values, keptIdx)
 }
 
-// SuffixByKeyword 删除被任意 keyword 覆盖的后缀。
-func SuffixByKeyword(suffixes, keywords []string) []string {
-	if len(keywords) == 0 {
-		return suffixes
+// DedupSuffixes 语义去重：被自身祖先 suffix 或被任一 keyword 覆盖则删除。
+// keywords 需为已语义去重的列表。
+func DedupSuffixes(values, keywords []string) []string {
+	idx := sortedByKeys(keys(values, reversedDomainKey))
+	set := make(map[string]struct{}, len(values))
+	var keptIdx []int
+	for _, i := range idx {
+		v := values[i]
+		if coveredBySuffix(v, set) || containsKeyword(v, keywords) {
+			continue
+		}
+		set[trimDot(v)] = struct{}{}
+		keptIdx = append(keptIdx, i)
 	}
-	var out []string
+	sort.Ints(keptIdx) // 按原始顺序输出
+	return reorder(values, keptIdx)
+}
+
+// DedupDomains 语义去重：被重复 domain（精确）、祖先 suffix 或任一 keyword 覆盖则删除。
+// domain 是精确匹配，不能被祖先 domain 覆盖（与 QX hostSet 一致）。
+// keywords / suffixes 需为已语义去重的列表。
+func DedupDomains(values, keywords, suffixes []string) []string {
+	set := make(map[string]struct{}, len(suffixes))
 	for _, s := range suffixes {
-		covered := false
-		for _, kw := range keywords {
-			if KeywordCovers(kw, s) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			out = append(out, s)
-		}
+		set[trimDot(s)] = struct{}{}
 	}
-	return out
+	idx := sortedByKeys(keys(values, reversedDomainKey))
+	domainSet := make(map[string]struct{}, len(values))
+	var keptIdx []int
+	for _, i := range idx {
+		v := values[i]
+		if coveredBySuffix(v, set) || coveredByDomain(v, domainSet) || containsKeyword(v, keywords) {
+			continue
+		}
+		domainSet[trimDot(v)] = struct{}{}
+		keptIdx = append(keptIdx, i)
+	}
+	sort.Ints(keptIdx) // 按原始顺序输出
+	return reorder(values, keptIdx)
 }
 
-// Domain 语义去重：被任意 keyword 或 suffix 覆盖的删除。
-func Domain(domains, keywords, suffixes []string) []string {
-	var out []string
-	for _, d := range domains {
-		covered := false
-		for _, kw := range keywords {
-			if KeywordCovers(kw, d) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			for _, s := range suffixes {
-				if SuffixCovers(s, d) {
-					covered = true
-					break
-				}
-			}
-		}
-		if !covered {
-			out = append(out, d)
-		}
-	}
-	return out
+// coveredByDomain 判断 v 是否与 set 中的 domain 精确相等（domain 不匹配子域）。
+func coveredByDomain(v string, set map[string]struct{}) bool {
+	_, ok := set[trimDot(v)]
+	return ok
 }
 
 // IPCIDR 语义去重：宽网段包含窄网段时删除窄段（保留更宽的），保持相对顺序。
@@ -116,19 +127,69 @@ func IPCIDR(values []string) []string {
 	return reorder(values, kept)
 }
 
-func sortedByWidth(values []string, width func(string) int) []int {
-	idx := make([]int, len(values))
+// coveredBySuffix 判断 v 自身或其任意祖先标签域是否已在 set 中。
+func coveredBySuffix(v string, set map[string]struct{}) bool {
+	v = trimDot(v)
+	for pos := 0; ; {
+		if _, ok := set[v[pos:]]; ok {
+			return true
+		}
+		dot := strings.IndexByte(v[pos:], '.')
+		if dot < 0 {
+			return false
+		}
+		pos += dot + 1
+	}
+}
+
+// containsKeyword 判断 v 是否包含任一 keyword（长度预过滤，长 keyword 不可能命中短值）。
+func containsKeyword(v string, keywords []string) bool {
+	v = trimDot(v)
+	for _, kw := range keywords {
+		if kw != "" && len(kw) <= len(v) && strings.Contains(v, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// reversedDomainKey "sub.example.com" → "com.example.sub"（祖先按字典序在前）。
+func reversedDomainKey(v string) string {
+	v = trimDot(v)
+	labels := strings.Split(v, ".")
+	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
+		labels[i], labels[j] = labels[j], labels[i]
+	}
+	return strings.Join(labels, ".")
+}
+
+func identityKey(v string) string {
+	return v
+}
+
+// keys 预计算每条值的排序 key（避免排序比较器内重复计算）。
+func keys(values []string, key func(string) string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = key(v)
+	}
+	return out
+}
+
+// sortedByKeys 按预计算的 key 稳定排序，返回原下标。
+func sortedByKeys(keys []string) []int {
+	idx := make([]int, len(keys))
 	for i := range idx {
 		idx[i] = i
 	}
 	sort.SliceStable(idx, func(a, b int) bool {
-		return width(values[idx[a]]) < width(values[idx[b]])
+		return keys[idx[a]] < keys[idx[b]]
 	})
 	return idx
 }
 
-func suffixWidth(s string) int {
-	return strings.Count(strings.TrimPrefix(s, "."), ".") + 1
+func trimDot(s string) string {
+	return strings.TrimPrefix(s, ".")
 }
 
 func reorder(values []string, kept []int) []string {

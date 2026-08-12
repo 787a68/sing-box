@@ -19,11 +19,17 @@ func ParseHostLine(line string) (option.HeadlessRule, error) {
 	if line == "" {
 		return option.HeadlessRule{}, Skip("unknown", line)
 	}
-	// 兼容 ip-cidr,1.2.3.0/24 写法
+	// 兼容 ip-cidr,1.2.3.0/24 写法（显式 IP 校验，非法值跳过）
 	if idx := strings.Index(line, ","); idx >= 0 {
 		head := strings.ToLower(strings.TrimSpace(line[:idx]))
 		if head == "ip-cidr" || head == "ip6-cidr" {
-			return MakeRule("ip_cidr", []string{strings.TrimSpace(line[idx+1:])}), nil
+			value := strings.TrimSpace(line[idx+1:])
+			if _, err := netip.ParsePrefix(value); err != nil {
+				if _, err := netip.ParseAddr(value); err != nil {
+					return option.HeadlessRule{}, Skip("unknown", line)
+				}
+			}
+			return MakeRule("ip_cidr", []string{value}), nil
 		}
 		return option.HeadlessRule{}, Skip("unknown", line)
 	}

@@ -17,7 +17,7 @@ func Strings(values []string) []string {
 }
 
 // SuffixCovers 判断 parent 是否覆盖 child（child 是 parent 或 parent 的子域）。
-// 忽略前导点。
+// 忽略前导点。semantic 与 exclude 共用。
 func SuffixCovers(parent, child string) bool {
 	p := strings.TrimPrefix(parent, ".")
 	c := strings.TrimPrefix(child, ".")

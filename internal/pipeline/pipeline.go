@@ -68,8 +68,20 @@ func Build(confPath string, cfg Config) ([]*Report, error) {
 			return nil, fmt.Errorf("unknown source format %q (available: %s)", src.Format, strings.Join(transform.Names(), ", "))
 		}
 	}
-	// 校验 exclude 白名单
+	// 校验 head_rules 白名单（非法字段否则会被 Merge 静默丢弃）
+	for _, hr := range conf.HeadRules {
+		if err := transform.ValidateHeadlessRule(hr); err != nil {
+			return nil, fmt.Errorf("head rule contains non-whitelist field: %v", err)
+		}
+	}
+	// 校验 exclude：仅默认类型 + 白名单字段；query_type / logical 不参与值级过滤，直接拒绝
 	for _, ex := range conf.Excludes {
+		if ex.Type != "default" && ex.Type != "" {
+			return nil, fmt.Errorf("exclude rule type %q not supported", ex.Type)
+		}
+		if len(ex.DefaultOptions.QueryType) > 0 {
+			return nil, fmt.Errorf("exclude rule contains query_type (not supported)")
+		}
 		if err := transform.ValidateHeadlessRule(ex); err != nil {
 			return nil, fmt.Errorf("exclude rule contains non-whitelist field: %v", err)
 		}
@@ -103,29 +115,25 @@ func Build(confPath string, cfg Config) ([]*Report, error) {
 	// 归并 + 去重 + 排除
 	merged := render.Merge(append(mergeableHead, rules...))
 	d := &merged.DefaultOptions
-	textRemoved := removeCount(d.Domain, dedup.Strings(d.Domain))
-	d.Domain = dedup.Strings(d.Domain)
-	textRemoved += removeCount(d.DomainSuffix, dedup.Strings(d.DomainSuffix))
-	d.DomainSuffix = dedup.Strings(d.DomainSuffix)
-	textRemoved += removeCount(d.DomainKeyword, dedup.Strings(d.DomainKeyword))
-	d.DomainKeyword = dedup.Strings(d.DomainKeyword)
-	textRemoved += removeCount(d.DomainRegex, dedup.Strings(d.DomainRegex))
-	d.DomainRegex = dedup.Strings(d.DomainRegex)
-	textRemoved += removeCount(d.IPCIDR, dedup.Strings(d.IPCIDR))
-	d.IPCIDR = dedup.Strings(d.IPCIDR)
-	textRemoved += removeCount(d.SourceIPCIDR, dedup.Strings(d.SourceIPCIDR))
-	d.SourceIPCIDR = dedup.Strings(d.SourceIPCIDR)
+	var textRemoved int
+	textRemoved += dropCount(&d.Domain, dedup.Strings)
+	textRemoved += dropCount(&d.DomainSuffix, dedup.Strings)
+	textRemoved += dropCount(&d.DomainKeyword, dedup.Strings)
+	textRemoved += dropCount(&d.DomainRegex, dedup.Strings)
+	textRemoved += dropCount(&d.IPCIDR, dedup.Strings)
+	textRemoved += dropCount(&d.SourceIPCIDR, dedup.Strings)
 
-	semanticRemoved := removeCount(d.DomainSuffix, dedup.DomainSuffix(d.DomainSuffix))
-	d.DomainSuffix = dedup.DomainSuffix(d.DomainSuffix)
-	semanticRemoved += removeCount(d.DomainSuffix, dedup.SuffixByKeyword(d.DomainSuffix, d.DomainKeyword))
-	d.DomainSuffix = dedup.SuffixByKeyword(d.DomainSuffix, d.DomainKeyword)
-	semanticRemoved += removeCount(d.Domain, dedup.Domain(d.Domain, d.DomainKeyword, d.DomainSuffix))
-	d.Domain = dedup.Domain(d.Domain, d.DomainKeyword, d.DomainSuffix)
-	semanticRemoved += removeCount(d.IPCIDR, dedup.IPCIDR(d.IPCIDR))
-	d.IPCIDR = dedup.IPCIDR(d.IPCIDR)
-	semanticRemoved += removeCount(d.SourceIPCIDR, dedup.IPCIDR(d.SourceIPCIDR))
-	d.SourceIPCIDR = dedup.IPCIDR(d.SourceIPCIDR)
+	// 语义去重（QX 式顺序：keyword → suffix → domain，每条向后去重）
+	var semanticRemoved int
+	semanticRemoved += dropCount(&d.DomainKeyword, dedup.DedupKeywords)
+	semanticRemoved += dropCount(&d.DomainSuffix, func(v []string) []string {
+		return dedup.DedupSuffixes(v, d.DomainKeyword)
+	})
+	semanticRemoved += dropCount(&d.Domain, func(v []string) []string {
+		return dedup.DedupDomains(v, d.DomainKeyword, d.DomainSuffix)
+	})
+	semanticRemoved += dropCount(&d.IPCIDR, dedup.IPCIDR)
+	semanticRemoved += dropCount(&d.SourceIPCIDR, dedup.IPCIDR)
 
 	ex := render.Excludes(conf.Excludes)
 	beforeValues := countValues([]option.HeadlessRule{merged})
@@ -198,8 +206,11 @@ func splitHeadRules(headRules []option.HeadlessRule) (mergeable, standalone []op
 	return
 }
 
-// removeCount 返回 before 与 after 的数量差（用于去重统计）。
-func removeCount(before, after []string) int {
+// dropCount 对列表执行一次去重并写回，返回删除数（一次计算，计数复用结果）。
+func dropCount[T ~[]string](list *T, dedupFn func([]string) []string) int {
+	before := *list
+	after := dedupFn([]string(before))
+	*list = T(after)
 	return len(before) - len(after)
 }
 

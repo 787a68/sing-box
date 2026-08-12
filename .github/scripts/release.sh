@@ -73,12 +73,12 @@ fi
 #   AI_MODEL      模型名（默认 auto）
 #   AI_MAX_CHARS  输出最大字符数（默认 2000）
 # 失败不阻塞发布（显示 unavailable）。
+# 认证：CI 用 GITHUB_TOKEN（需 copilot-requests: write 权限）；
+# 本地运行无 GITHUB_TOKEN 时尝试 copilot 已保存的 OAuth 凭据。
 AI_SECTION=""
 if [ "${ENABLE_AI:-true}" = "true" ]; then
   if ! command -v copilot >/dev/null 2>&1; then
     AI_SECTION="(unavailable: @github/copilot CLI not installed)"
-  elif [ -z "${GITHUB_TOKEN:-}" ]; then
-    AI_SECTION="(unavailable: GITHUB_TOKEN not set)"
   else
     AI_MAX_CHARS="${AI_MAX_CHARS:-2000}"
     AI_MODEL="${AI_MODEL:-auto}"

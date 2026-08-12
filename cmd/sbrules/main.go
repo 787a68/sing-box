@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"sing-box-rules/internal/pipeline"
@@ -82,16 +83,26 @@ func runBuild(args []string) {
 
 	failed := false
 	var reports []*pipeline.Report
-	for _, confPath := range confPaths {
-		fmt.Printf("building %s\n", confPath)
-		confReports, err := pipeline.Build(confPath, cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  error: %v\n", err)
+	results := make([]buildResult, len(confPaths))
+	var wg sync.WaitGroup
+	for i, confPath := range confPaths {
+		wg.Add(1)
+		go func(i int, confPath string) {
+			defer wg.Done()
+			fmt.Printf("building %s\n", confPath)
+			confReports, err := pipeline.Build(confPath, cfg)
+			results[i] = buildResult{confReports: confReports, err: err}
+		}(i, confPath)
+	}
+	wg.Wait()
+	for _, res := range results {
+		if res.err != nil {
+			fmt.Fprintf(os.Stderr, "  error: %v\n", res.err)
 			failed = true
 			continue
 		}
-		reports = append(reports, confReports...)
-		for _, r := range confReports {
+		reports = append(reports, res.confReports...)
+		for _, r := range res.confReports {
 			fmt.Printf("  %s\n", r.Summary())
 		}
 	}
@@ -106,6 +117,12 @@ func runBuild(args []string) {
 	if failed {
 		os.Exit(1)
 	}
+}
+
+// buildResult 单个 conf 的构建结果（按输入顺序收集，保证 report.json 顺序确定）。
+type buildResult struct {
+	confReports []*pipeline.Report
+	err         error
 }
 
 func runCheck(args []string) {

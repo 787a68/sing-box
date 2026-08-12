@@ -2,6 +2,7 @@ package transform
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sagernet/sing-box/option"
@@ -18,7 +19,9 @@ var dnsTypeMap = map[string]option.DNSQueryType{
 
 // MakeRule 按白名单字段构造单字段规则。
 // field 必须是白名单字段；port 系列传入的是字符串（uint16 解析失败则丢弃）。
+// 空值统一在此丢弃（DOMAIN, / host,,proxy / ip-cidr, 等不会污染输出）。
 func MakeRule(field string, values []string) option.HeadlessRule {
+	values = filterEmpty(values)
 	rule := DefaultRule()
 	d := &rule.DefaultOptions
 	appendStr := func(target *badoption.Listable[string]) {
@@ -65,16 +68,27 @@ func MakeRule(field string, values []string) option.HeadlessRule {
 	return rule
 }
 
+// filterEmpty 丢弃空值（空 domain_suffix/keyword 无意义，空 regex 会匹配一切）。
+func filterEmpty(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // ParseQueryType 解析 DNS 查询类型（类型名或数字）。
 func ParseQueryType(s string) (option.DNSQueryType, bool) {
 	if qt, err := queryTypeByName(s); err == nil {
 		return qt, true
 	}
-	var n uint16
-	if _, err := fmt.Sscanf(s, "%d", &n); err == nil {
-		return option.DNSQueryType(n), true
+	n, err := strconv.ParseUint(s, 10, 16)
+	if err != nil {
+		return 0, false
 	}
-	return 0, false
+	return option.DNSQueryType(n), true
 }
 
 func queryTypeByName(s string) (option.DNSQueryType, error) {
@@ -146,6 +160,8 @@ func validateDefault(d option.DefaultHeadlessRule) error {
 		return Skip("whitelist", "network_interface_address")
 	case len(d.DefaultInterfaceAddress) > 0:
 		return Skip("whitelist", "default_interface_address")
+	case d.Invert:
+		return Skip("whitelist", "invert")
 	}
 	return nil
 }

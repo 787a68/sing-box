@@ -20,12 +20,7 @@ func ParseQXLine(line string) (option.HeadlessRule, error) {
 		return option.HeadlessRule{}, Skip("unknown", line)
 	}
 	ruleType := strings.ToLower(strings.TrimSpace(parts[0]))
-	value := strings.TrimSpace(parts[1])
-	// 去掉尾部策略名（第 3 段及以后，如 ,reject / ,no-resolve）
-	// 注意：domain 值本身不含逗号；ip-cidr 的 no-resolve 在第 3 段
-	if idx := strings.Index(value, ","); idx >= 0 {
-		value = strings.TrimSpace(value[:idx])
-	}
+	value := strings.TrimSpace(parts[1]) // 第 3 段起为策略名（,reject / ,no-resolve），已按首个逗号切分剥除
 
 	switch ruleType {
 	case "host":

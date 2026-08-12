@@ -1,6 +1,6 @@
 # sing-box rules
 
-基于最新 beta（sing-box v1.14.0-beta.14）的规则集生成器。把 **clash / host** 两种行格式的
+基于最新 beta（sing-box v1.14.0-beta.14）的规则集生成器。把 **clash / host / qx** 三种行格式的
 上游规则源，清洗、转换、去重、排除后，输出 sing-box rule-set 的两种产物：
 
 - `<tag>.json` — source 格式（人类可读、可审查，version 5）
@@ -129,19 +129,23 @@ build 参数：
 ```
 .conf(JSONC) 解析 → 并发抓取(worker pool, 重试) → 行清洗(注释/行尾注释)
   → 格式 Parser → option.HeadlessRule（此后不再碰字符串）
-  → 字段归并(同类型合并成单条规则的大数组)
-  → 文本去重 → 语义去重 → exclude 值级过滤 → head_rules 前置
+  → 字段归并(同类型合并成单条规则的大数组，head_rules 可归并组并入)
+  → 文本去重 → 语义去重 → exclude 值级过滤（最后执行，控制最终可见结果）
+  → outputs 字段白名单拆分（query_type / logical 独立 head_rules 保持最前）
   → 渲染: source JSON (v5) + binary SRS (v5, 官方 srs.Write)
   → 自检: 官方 srs.Read 回读 + Upgrade() 验证
 ```
 
 ### 语义去重
 
+与 QX 对齐：每条先按 key 排序（域名按反转标签字典序，祖先在前），再单遍扫描——
+每条只与**已保留的更靠前**条目比对，被覆盖即删除（首条保留）；输出保持原输入相对顺序。
+
 | 场景 | 规则 |
 |---|---|
-| `domain_suffix` 父子域 | 父域覆盖子域：`google.com` 删除 `sub.google.com` |
-| `domain` | 被 keyword 包含或被 suffix 覆盖则删除 |
-| `domain_keyword` | 只做文本去重（keyword 之间不互相覆盖） |
+| `domain_suffix` 父子域 | 祖先覆盖后代：`google.com` 删除 `sub.google.com` |
+| `domain` | 被 keyword 包含、被 suffix 祖先覆盖或重复则删除 |
+| `domain_keyword` | 被更早 keyword 子串覆盖则删除：`adsys` 删除 `adsystem` |
 | `ip_cidr` | 宽网段包含窄网段时保留宽段（顺序无关）：`10.0.0.0/8` 删除 `10.1.0.0/16` |
 | 其余字段 | 文本去重 |
 

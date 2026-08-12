@@ -3,59 +3,81 @@ package render
 import (
 	"net/netip"
 	"regexp"
-	"strings"
 
 	"github.com/sagernet/sing-box/option"
+
+	"sing-box-rules/internal/dedup"
 )
 
 // Excludes 是一组用于值级过滤的 headless 规则（只允许白名单字段）。
 type Excludes []option.HeadlessRule
+
+// compiledExclude 一条 exclude 规则 + 预编译正则（避免对每个候选值重复编译）。
+type compiledExclude struct {
+	d  option.DefaultHeadlessRule
+	re []*regexp.Regexp
+}
+
+type compiledExcludes []compiledExclude
+
+func (ex Excludes) compile() compiledExcludes {
+	out := make([]compiledExclude, 0, len(ex))
+	for _, e := range ex {
+		if e.Type != "default" && e.Type != "" {
+			continue
+		}
+		c := compiledExclude{d: e.DefaultOptions}
+		for _, re := range e.DefaultOptions.DomainRegex {
+			if r, err := regexp.Compile(re); err == nil {
+				c.re = append(c.re, r)
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
 
 // Apply 对单条默认规则做值级过滤：某个值被任一 exclude 条件覆盖即删除。
 func (ex Excludes) Apply(r *option.HeadlessRule) {
 	if len(ex) == 0 {
 		return
 	}
+	compiled := ex.compile()
 	d := &r.DefaultOptions
-	d.Domain = filterStr(d.Domain, func(v string) bool { return !ex.coveredDomain(v) })
-	d.DomainSuffix = filterStr(d.DomainSuffix, func(v string) bool { return !ex.coveredDomain(v) })
-	d.DomainKeyword = filterStr(d.DomainKeyword, func(v string) bool { return !ex.coveredDomain(v) })
-	d.DomainRegex = filterStr(d.DomainRegex, func(v string) bool { return !ex.coveredDomain(v) })
-	d.IPCIDR = filterStr(d.IPCIDR, func(v string) bool { return !ex.coveredIP(v) })
-	d.SourceIPCIDR = filterStr(d.SourceIPCIDR, func(v string) bool { return !ex.coveredIP(v) })
-	d.Port = filterUint16(d.Port, func(v uint16) bool { return !ex.coveredPort(v) })
-	d.SourcePort = filterUint16(d.SourcePort, func(v uint16) bool { return !ex.coveredPort(v) })
-	d.PortRange = filterStr(d.PortRange, func(v string) bool { return !ex.coveredStr(v) })
-	d.SourcePortRange = filterStr(d.SourcePortRange, func(v string) bool { return !ex.coveredStr(v) })
-	d.Network = filterStr(d.Network, func(v string) bool { return !ex.coveredStr(v) })
+	d.Domain = filterList(d.Domain, func(v string) bool { return !compiled.coveredDomain(v) })
+	d.DomainSuffix = filterList(d.DomainSuffix, func(v string) bool { return !compiled.coveredDomain(v) })
+	d.DomainKeyword = filterList(d.DomainKeyword, func(v string) bool { return !compiled.coveredDomain(v) })
+	d.DomainRegex = filterList(d.DomainRegex, func(v string) bool { return !compiled.coveredDomain(v) })
+	d.IPCIDR = filterList(d.IPCIDR, func(v string) bool { return !compiled.coveredIP(v) })
+	d.SourceIPCIDR = filterList(d.SourceIPCIDR, func(v string) bool { return !compiled.coveredIP(v) })
+	d.Port = filterList(d.Port, func(v uint16) bool { return !compiled.coveredPort(v) })
+	d.SourcePort = filterList(d.SourcePort, func(v uint16) bool { return !compiled.coveredPort(v) })
+	d.PortRange = filterList(d.PortRange, func(v string) bool { return !compiled.coveredStr(v) })
+	d.SourcePortRange = filterList(d.SourcePortRange, func(v string) bool { return !compiled.coveredStr(v) })
+	d.Network = filterList(d.Network, func(v string) bool { return !compiled.coveredStr(v) })
 }
 
 // coveredDomain 检查候选域名字符串是否被任一 exclude 的域名系字段覆盖。
-func (ex Excludes) coveredDomain(value string) bool {
-	for _, e := range ex {
-		if e.Type != "default" && e.Type != "" {
-			continue
-		}
-		d := e.DefaultOptions
+func (cs compiledExcludes) coveredDomain(value string) bool {
+	for _, c := range cs {
+		d := c.d
 		for _, v := range d.Domain {
 			if v == value {
 				return true
 			}
 		}
 		for _, v := range d.DomainSuffix {
-			value = strings.TrimPrefix(value, ".")
-			s := strings.TrimPrefix(v, ".")
-			if value == s || strings.HasSuffix(value, "."+s) {
+			if dedup.SuffixCovers(v, value) {
 				return true
 			}
 		}
 		for _, v := range d.DomainKeyword {
-			if strings.Contains(strings.TrimPrefix(value, "."), v) {
+			if dedup.KeywordCovers(v, value) {
 				return true
 			}
 		}
-		for _, v := range d.DomainRegex {
-			if re, err := regexp.Compile(v); err == nil && re.MatchString(value) {
+		for _, re := range c.re {
+			if re.MatchString(value) {
 				return true
 			}
 		}
@@ -64,16 +86,13 @@ func (ex Excludes) coveredDomain(value string) bool {
 }
 
 // coveredIP 检查候选 CIDR/IP 是否被任一 exclude 的 ip_cidr 字段包含。
-func (ex Excludes) coveredIP(value string) bool {
+func (cs compiledExcludes) coveredIP(value string) bool {
 	prefix, ok := parsePrefix(value)
 	if !ok {
 		return false
 	}
-	for _, e := range ex {
-		if e.Type != "default" && e.Type != "" {
-			continue
-		}
-		for _, v := range e.DefaultOptions.IPCIDR {
+	for _, c := range cs {
+		for _, v := range c.d.IPCIDR {
 			p, ok := parsePrefix(v)
 			if ok && p.Contains(prefix.Addr()) {
 				return true
@@ -83,12 +102,9 @@ func (ex Excludes) coveredIP(value string) bool {
 	return false
 }
 
-func (ex Excludes) coveredPort(v uint16) bool {
-	for _, e := range ex {
-		if e.Type != "default" && e.Type != "" {
-			continue
-		}
-		for _, p := range e.DefaultOptions.Port {
+func (cs compiledExcludes) coveredPort(v uint16) bool {
+	for _, c := range cs {
+		for _, p := range c.d.Port {
 			if p == v {
 				return true
 			}
@@ -98,12 +114,9 @@ func (ex Excludes) coveredPort(v uint16) bool {
 }
 
 // coveredStr 精确匹配（port_range / network 等字符串字段）。
-func (ex Excludes) coveredStr(value string) bool {
-	for _, e := range ex {
-		if e.Type != "default" && e.Type != "" {
-			continue
-		}
-		d := e.DefaultOptions
+func (cs compiledExcludes) coveredStr(value string) bool {
+	for _, c := range cs {
+		d := c.d
 		if containsStr(d.PortRange, value) || containsStr(d.SourcePortRange, value) ||
 			containsStr(d.Network, value) {
 			return true
@@ -131,18 +144,8 @@ func containsStr(list []string, v string) bool {
 	return false
 }
 
-func filterStr(list []string, keep func(string) bool) []string {
-	var out []string
-	for _, v := range list {
-		if keep(v) {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
-func filterUint16(list []uint16, keep func(uint16) bool) []uint16 {
-	var out []uint16
+func filterList[T ~[]E, E any](list T, keep func(E) bool) T {
+	var out T
 	for _, v := range list {
 		if keep(v) {
 			out = append(out, v)
