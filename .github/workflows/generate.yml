@@ -55,7 +55,9 @@ jobs:
         run: npm install -g @github/copilot
 
       - name: Commit and push to rule-set
-        # GITHUB_TOKEN 由 Actions 自动注入，copilot CLI 自动读取（需 copilot-requests: write 权限）
+        # 显式注入 GITHUB_TOKEN（官方示例写法）：本仓库实测自动注入缺失，
+        # copilot CLI 依赖它做认证（配合 copilot-requests: write 权限）。
         env:
           ENABLE_AI: ${{ vars.ENABLE_AI }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash .github/scripts/release.sh
